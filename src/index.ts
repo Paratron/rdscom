@@ -1,4 +1,4 @@
-import type { Redis } from 'ioredis';
+import { Redis } from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
 
 type MessageHandler = (message: string, traceId: string) => Promise<void>;
@@ -28,8 +28,8 @@ const createMessageBroker = (redisClient: Redis) => {
   ) => {
     let worklimit = initialWorklimit;
     let activeWorkers = 0;
-    let isRunning = true;
-    const shutdownSignal = `${channelName}:shutdown`;
+    let isRunning = false;
+    const shutdownSignal = `${channelName}:trm`;
 
     const processMessage = async () => {
       if (!isRunning || (activeWorkers >= worklimit && worklimit !== 0)) {

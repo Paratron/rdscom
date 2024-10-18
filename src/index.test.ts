@@ -2,7 +2,17 @@ import { Redis } from 'ioredis';
 import { createMessageBroker, MessageHandler, ErrorHandler, RPCHandler } from '../src/index';
 
 // Mock ioredis
-jest.mock('ioredis');
+jest.mock('ioredis', () => {
+    const mRedis = {
+        rpush: jest.fn().mockResolvedValue(1),
+        blpop: jest.fn().mockResolvedValue(null),
+        del: jest.fn().mockResolvedValue(1),
+        // Add other Redis methods if needed
+    };
+    return {
+        Redis: jest.fn(() => mRedis),
+    };
+});
 
 describe('rdscom', () => {
   let redisClient: jest.Mocked<Redis>;
@@ -50,7 +60,7 @@ describe('rdscom', () => {
       // Wait for the message to be processed
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(redisClient.blpop).toHaveBeenCalledWith('test-channel', 'test-channel:shutdown', 0);
+      expect(redisClient.blpop).toHaveBeenCalledWith('test-channel', 'test-channel:trm', 0);
       expect(handler).toHaveBeenCalledWith('test-message', 'test-trace');
 
       await worker.stop();
