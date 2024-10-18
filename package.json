@@ -1,13 +1,13 @@
 {
   "name": "rdscom",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A redis based communication library for microservices",
   "files": [
     "dist"
   ],
   "main": "dist/index.js",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node14 --outfile=dist/index.js --minify --sourcemap && tsc --emitDeclarationOnly",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node14 --outfile=dist/index.js --minify --sourcemap && cp src/index.d.ts dist/index.d.ts",
     "test": "jest"
   },
   "author": "",
