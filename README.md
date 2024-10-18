@@ -101,23 +101,31 @@ const rpcHandler = messageBroker.listenAndRespond(
 
 ## API Reference
 
-### `createMessageBroker(redisClient: Redis)`
+`createMessageBroker(redisClient: Redis)`
 
 Creates a new message broker.
 
-### `messageBroker.send(channelName: string, message: string, traceId?: string): Promise<void>`
+-----
+
+`messageBroker.send(channelName: string, message: string, traceId?: string): Promise<void>`
 
 Sends a message to a specified channel.
 
-### `messageBroker.listen(channelName: string, handler: MessageHandler, errorHandler: ErrorHandler, initialWorklimit?: number)`
+-----
+
+`messageBroker.listen(channelName: string, handler: MessageHandler, errorHandler: ErrorHandler, initialWorklimit?: number)`
 
 Starts a listener for a specified channel.
 
-### `messageBroker.sendAndWaitForResponse(channelName: string, message: any, traceId?: string): Promise<string>`
+-----
+
+`messageBroker.sendAndWaitForResponse(channelName: string, message: any, traceId?: string): Promise<string>`
 
 Sends an RPC request and waits for the response.
 
-### `messageBroker.listenAndRespond(channelName: string, handler: RPCHandler, errorHandler: ErrorHandler, initialWorklimit?: number)`
+-----
+
+`messageBroker.listenAndRespond(channelName: string, handler: RPCHandler, errorHandler: ErrorHandler, initialWorklimit?: number)`
 
 Starts an RPC handler for a specified channel.
 

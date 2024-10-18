@@ -1,6 +1,6 @@
 {
   "name": "rdscom",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A redis based communication library for microservices",
   "files": [
     "dist"
