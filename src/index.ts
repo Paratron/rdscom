@@ -105,7 +105,11 @@ const createMessageBroker = (redisClient: Redis) => {
     
     await redisClient.rpush(channelName, JSON.stringify(tracedMessage));
     
-    const [, response] = await redisClient.blpop(responseChannel, 30);
+    const result = await redisClient.blpop(responseChannel, 30);
+    if (result === null) {
+      throw new Error('No response received');
+    }
+    const [, response] = result;
     await redisClient.del(responseChannel);
     
     return response;
