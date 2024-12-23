@@ -36,7 +36,7 @@ jobs:
       with:
         diff-search: true
         file-name: package.json
-        file-url: https://unpkg.com/rdscom@latest/package.json
+        file-url: https://unpkg.com/rdscom/package.json
         static-checking: localIsNew
 
     - name: Publish to npm
