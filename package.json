@@ -1,7 +1,7 @@
 {
   "name": "rdscom",
   "version": "1.0.3",
-  "description": "A redis based communication library for microservices",
+  "description": "A lightweight and efficient TypeScript library for message queuing and RPC using Redis",
   "files": [
     "dist"
   ],
@@ -12,6 +12,10 @@
   },
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paratron/rdscom"
+  },
   "devDependencies": {
     "esbuild": "^0.24.0",
     "@types/jest": "^29.5.13",
