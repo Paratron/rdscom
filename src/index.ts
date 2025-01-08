@@ -78,9 +78,12 @@ const createMessageBroker = (redisClient: Redis, options?: MessageBrokerOptions)
           error: error instanceof Error ? error.message : 'Unknown error',
           channel: channelName
         });
+
+        isRunning = false;
+        activeWorkers = 0;
       }
       finally {
-        activeWorkers--;
+        activeWorkers && activeWorkers--;
         if (isRunning) {
           setImmediate(processMessage);
         }

@@ -10,6 +10,7 @@ describe('rdscom', () => {
   let mockLogger: { warn: jest.Mock, error: jest.Mock };
 
   beforeEach(() => {
+    jest.useFakeTimers();
     redisClient = {
       rpush: jest.fn().mockResolvedValue(1),
       blpop: jest.fn().mockImplementation((...args) => {
@@ -62,16 +63,16 @@ describe('rdscom', () => {
   });
 
   describe('listen', () => {
-    it('should log Redis errors through configured logger', async () => {
+    it('should log Redis error and stop workers when Redis fails', async () => {
       const handler: MessageHandler = jest.fn();
       const e = new Error('Redis connection lost');
 
       redisClient.blpop.mockRejectedValueOnce(e);
 
-      messageBroker.listen('test-channel', handler);
+      const worker = messageBroker.listen('test-channel', handler);
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
 
       expect(mockLogger.error).toHaveBeenCalledWith(
         'Redis operation failed:',
@@ -80,6 +81,9 @@ describe('rdscom', () => {
           channel: 'test-channel'
         })
       );
+
+      const stats = worker.getStats();
+      expect(stats.activeWorkers).toBe(0);
     });
 
     it('should handle malformed messages', async () => {
@@ -90,8 +94,8 @@ describe('rdscom', () => {
 
       const worker = messageBroker.listen('test-channel', handler, errorHandler);
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
         'Received malformed message:',
@@ -114,16 +118,13 @@ describe('rdscom', () => {
       const handler: MessageHandler = jest.fn();
       const worker = messageBroker.listen('test-channel', handler);
 
-      // Initial state should show active worker(s)
       const initialStats = worker.getStats();
       expect(initialStats.worklimit).toBe(1);
       expect(initialStats.activeWorkers).toBeGreaterThanOrEqual(0);
 
-      // Change work limit
       worker.setWorklimit(5);
       expect(worker.getStats().worklimit).toBe(5);
 
-      // Stop and verify we can restart
       await worker.stop();
       worker.start();
 
@@ -135,9 +136,10 @@ describe('rdscom', () => {
     it('should handle timeout when no response is received', async () => {
       redisClient.blpop.mockResolvedValueOnce(null);
 
-      await expect(messageBroker.sendAndWaitForResponse('test-channel', 'test-message'))
-        .rejects
-        .toThrow('RPC timeout: No response received within 30 seconds');
+      const responsePromise = messageBroker.sendAndWaitForResponse('test-channel', 'test-message');
+
+      jest.advanceTimersByTime(31000);
+      await expect(responsePromise).rejects.toThrow('RPC timeout: No response received within 30 seconds');
     });
 
     it('should handle successful RPC communication', async () => {
@@ -185,8 +187,15 @@ describe('rdscom', () => {
 
       const worker = messageBroker.listenAndRespond('test-channel', handler);
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Flush initial worker setup
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Flush the blpop resolution
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Flush the handler execution
+      await Promise.resolve();
+      jest.runAllTimers();
 
       expect(handler).toHaveBeenCalledWith('test-message', 'test-trace');
       expect(redisClient.rpush).toHaveBeenCalledWith('rpc:test', 'response');
@@ -196,7 +205,7 @@ describe('rdscom', () => {
 
     it('should handle errors in RPC response sending', async () => {
       const handler: RPCHandler = jest.fn().mockResolvedValue('response');
-      const errorHandler: RPCErrorHandler = jest.fn();
+      const errorHandler: RPCErrorHandler = jest.fn().mockResolvedValue(undefined);  // Mock the errorHandler as async
       const error = new Error('Redis connection lost');
 
       const messageData = {
@@ -216,8 +225,20 @@ describe('rdscom', () => {
 
       const worker = messageBroker.listenAndRespond('test-channel', handler, errorHandler);
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Initial worker setup
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Message processing
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Handler execution
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Error handler execution
+      await Promise.resolve();
+      jest.runAllTimers();
+      // Final promise resolution
+      await Promise.resolve();
 
       expect(errorHandler).toHaveBeenCalledWith(
         expect.objectContaining({ message: expect.stringContaining('Failed to send RPC response') }),
