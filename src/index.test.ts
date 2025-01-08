@@ -1,29 +1,30 @@
-import { Redis } from 'ioredis';
-import { createMessageBroker, MessageHandler, ErrorHandler, RPCHandler } from '../src/index';
-
-// Mock ioredis
-jest.mock('ioredis', () => {
-    const mRedis = {
-        rpush: jest.fn().mockResolvedValue(1),
-        blpop: jest.fn().mockResolvedValue(null),
-        del: jest.fn().mockResolvedValue(1),
-    };
-    return {
-        Redis: jest.fn(() => mRedis),
-    };
-});
+import { createMessageBroker, MessageHandler, MalformedMessageHandler, RPCHandler, RPCErrorHandler } from '../src/index';
 
 describe('rdscom', () => {
-  let redisClient: jest.Mocked<Redis>;
+  let redisClient: {
+    rpush: jest.Mock,
+    blpop: jest.Mock,
+    del: jest.Mock
+  };
   let messageBroker: ReturnType<typeof createMessageBroker>;
+  let mockLogger: { warn: jest.Mock, error: jest.Mock };
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    redisClient = new Redis() as jest.Mocked<Redis>;
-    redisClient.rpush.mockResolvedValue(1);
-    redisClient.blpop.mockResolvedValue(null);
-    redisClient.del.mockResolvedValue(1);
-    messageBroker = createMessageBroker(redisClient);
+    redisClient = {
+      rpush: jest.fn().mockResolvedValue(1),
+      blpop: jest.fn().mockImplementation((...args) => {
+        const channelName = args[0];
+        return Promise.resolve([channelName, 'test-value']);
+      }),
+      del: jest.fn().mockResolvedValue(1),
+    };
+
+    mockLogger = {
+      warn: jest.fn(),
+      error: jest.fn()
+    };
+
+    messageBroker = createMessageBroker(redisClient as any, { logger: mockLogger });
   });
 
   afterEach(() => {
@@ -46,7 +47,7 @@ describe('rdscom', () => {
 
       await expect(messageBroker.send('test-channel', 'Hello, World!'))
         .rejects
-        .toThrow('Failed to send message to Redis: Redis connection lost');
+        .toThrow(error);
     });
 
     it('should include traceId if provided', async () => {
@@ -61,73 +62,77 @@ describe('rdscom', () => {
   });
 
   describe('listen', () => {
-    it('should handle Redis errors during message processing', async () => {
+    it('should log Redis errors through configured logger', async () => {
       const handler: MessageHandler = jest.fn();
-      const errorHandler: ErrorHandler = jest.fn();
-      const error = new Error('Redis connection lost');
-      
-      redisClient.blpop
-        .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce(['test-channel', JSON.stringify({ traceId: 'test-trace', payload: 'test-message' })]);
+      const e = new Error('Redis connection lost');
 
-      const worker = messageBroker.listen('test-channel', handler, errorHandler);
+      redisClient.blpop.mockRejectedValueOnce(e);
 
-      // Wait for the error to be processed
+      messageBroker.listen('test-channel', handler);
+
+      // Wait for processing
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('Redis operation failed: Redis connection lost') }),
-        'Error processing message',
-        expect.any(String)
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Redis operation failed:',
+        expect.objectContaining({
+          error: 'Redis connection lost',
+          channel: 'test-channel'
+        })
       );
-
-      await worker.stop();
     });
 
     it('should handle malformed messages', async () => {
       const handler: MessageHandler = jest.fn();
-      const errorHandler: ErrorHandler = jest.fn();
-      
+      const errorHandler: MalformedMessageHandler = jest.fn();
+
       redisClient.blpop.mockResolvedValueOnce(['test-channel', 'invalid-json']);
 
       const worker = messageBroker.listen('test-channel', handler, errorHandler);
 
-      // Wait for the message to be processed
+      // Wait for processing
       await new Promise(resolve => setTimeout(resolve, 100));
 
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Received malformed message:',
+        expect.objectContaining({
+          error: expect.any(String),
+          channel: 'test-channel',
+          message: 'invalid-json'
+        })
+      );
+
       expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('Failed to parse message') }),
-        'invalid-json',
-        expect.any(String)
+        expect.objectContaining({ message: expect.stringContaining('Malformed message received') }),
+        'invalid-json'
       );
 
       await worker.stop();
     });
 
-    it('should handle errors during worker shutdown', async () => {
+    it('should track worker stats correctly', async () => {
       const handler: MessageHandler = jest.fn();
-      const errorHandler: ErrorHandler = jest.fn();
-      const error = new Error('Redis connection lost');
-      
-      redisClient.rpush.mockRejectedValueOnce(error);
-      redisClient.del.mockRejectedValueOnce(error);
+      const worker = messageBroker.listen('test-channel', handler);
 
-      const worker = messageBroker.listen('test-channel', handler, errorHandler);
-      
-      await expect(worker.stop()).rejects.toThrow('Failed to stop worker: Redis connection lost');
+      // Initial state should show active worker(s)
+      const initialStats = worker.getStats();
+      expect(initialStats.worklimit).toBe(1);
+      expect(initialStats.activeWorkers).toBeGreaterThanOrEqual(0);
+
+      // Change work limit
+      worker.setWorklimit(5);
+      expect(worker.getStats().worklimit).toBe(5);
+
+      // Stop and verify we can restart
+      await worker.stop();
+      worker.start();
+
+      expect(redisClient.rpush).toHaveBeenCalledWith('test-channel:trm', '1');
     });
   });
 
   describe('sendAndWaitForResponse', () => {
-    beforeEach(() => {
-      // Reset mock implementations specifically for this describe block
-      redisClient.rpush.mockResolvedValue(1);
-      redisClient.blpop.mockResolvedValue(null);
-      redisClient.del.mockResolvedValue(1);
-    });
-
     it('should handle timeout when no response is received', async () => {
-      // Explicitly set the mock for this test
       redisClient.blpop.mockResolvedValueOnce(null);
 
       await expect(messageBroker.sendAndWaitForResponse('test-channel', 'test-message'))
@@ -135,76 +140,87 @@ describe('rdscom', () => {
         .toThrow('RPC timeout: No response received within 30 seconds');
     });
 
-    it('should handle Redis errors during RPC', async () => {
-      const error = new Error('Redis connection lost');
-      // Explicitly set the mock for this test
-      redisClient.rpush.mockRejectedValueOnce(error);
+    it('should handle successful RPC communication', async () => {
+      const responseMessage = 'response-data';
+      redisClient.blpop.mockResolvedValueOnce(['rpc:test', responseMessage]);
 
-      await expect(messageBroker.sendAndWaitForResponse('test-channel', 'test-message'))
-        .rejects
-        .toThrow('RPC operation failed: Redis connection lost');
+      const response = await messageBroker.sendAndWaitForResponse('test-channel', 'test-message');
+
+      expect(response).toBe(responseMessage);
+      expect(redisClient.del).toHaveBeenCalled();
     });
 
     it('should handle cleanup failures gracefully', async () => {
       const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
       const error = new Error('Cleanup failed');
-      
-      // Reset all mocks for this specific test
-      redisClient.rpush.mockReset().mockResolvedValue(1);
-      redisClient.blpop.mockReset().mockResolvedValue(['rpc:test', 'response']);
-      redisClient.del.mockReset().mockRejectedValue(error);
+
+      redisClient.blpop.mockResolvedValueOnce(['rpc:test', 'response']);
+      redisClient.del.mockRejectedValueOnce(error);
 
       const response = await messageBroker.sendAndWaitForResponse('test-channel', 'test-message');
-      
+
       expect(response).toBe('response');
       expect(consoleSpy).toHaveBeenCalledWith('Failed to clean up RPC response channel:', error);
-      
+
       consoleSpy.mockRestore();
     });
   });
 
   describe('listenAndRespond', () => {
-    it('should handle Redis errors in RPC response', async () => {
+    it('should handle RPC messages successfully', async () => {
       const handler: RPCHandler = jest.fn().mockResolvedValue('response');
-      const errorHandler: ErrorHandler = jest.fn();
-      const error = new Error('Redis connection lost');
+      const messageData = {
+        rpcId: 'test-rpc',
+        message: 'test-message',
+        responseChannel: 'rpc:test'
+      };
 
-      redisClient.blpop.mockResolvedValueOnce(['test-channel', JSON.stringify({
-        traceId: 'test-trace',
-        payload: JSON.stringify({ rpcId: 'test-rpc', message: 'test-message', responseChannel: 'rpc:test' })
-      })]);
-      redisClient.rpush.mockRejectedValueOnce(error);
+      redisClient.blpop.mockResolvedValueOnce([
+        'test-channel',
+        JSON.stringify({
+          traceId: 'test-trace',
+          payload: JSON.stringify(messageData)
+        })
+      ]);
 
-      const worker = messageBroker.listenAndRespond('test-channel', handler, errorHandler);
+      const worker = messageBroker.listenAndRespond('test-channel', handler);
 
-      // Wait for the message to be processed
+      // Wait for processing
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('Failed to send RPC response') }),
-        expect.any(String),
-        'test-trace'
-      );
+      expect(handler).toHaveBeenCalledWith('test-message', 'test-trace');
+      expect(redisClient.rpush).toHaveBeenCalledWith('rpc:test', 'response');
 
       await worker.stop();
     });
 
-    it('should handle malformed RPC messages', async () => {
-      const handler: RPCHandler = jest.fn();
-      const errorHandler: ErrorHandler = jest.fn();
+    it('should handle errors in RPC response sending', async () => {
+      const handler: RPCHandler = jest.fn().mockResolvedValue('response');
+      const errorHandler: RPCErrorHandler = jest.fn();
+      const error = new Error('Redis connection lost');
 
-      redisClient.blpop.mockResolvedValueOnce(['test-channel', JSON.stringify({
-        traceId: 'test-trace',
-        payload: 'invalid-json'
-      })]);
+      const messageData = {
+        rpcId: 'test-rpc',
+        message: 'test-message',
+        responseChannel: 'rpc:test'
+      };
+
+      redisClient.blpop.mockResolvedValueOnce([
+        'test-channel',
+        JSON.stringify({
+          traceId: 'test-trace',
+          payload: JSON.stringify(messageData)
+        })
+      ]);
+      redisClient.rpush.mockRejectedValueOnce(error);
 
       const worker = messageBroker.listenAndRespond('test-channel', handler, errorHandler);
 
-      // Wait for the message to be processed
+      // Wait for processing
       await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(errorHandler).toHaveBeenCalledWith(
-        expect.any(Error),
+        expect.objectContaining({ message: expect.stringContaining('Failed to send RPC response') }),
         expect.any(String),
         'test-trace'
       );

@@ -1,6 +1,6 @@
 {
   "name": "rdscom",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "A lightweight and efficient TypeScript library for message queuing and RPC using Redis",
   "files": [
     "dist"

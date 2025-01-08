@@ -1,171 +1,103 @@
 # rdscom
 
-A lightweight and efficient TypeScript library for message queuing and RPC (Remote Procedure Call) using Redis. This library provides a simple interface for message passing and remote procedure calls while letting you manage Redis connections according to your application's needs.
+A lightweight and efficient TypeScript library for message queuing and RPC (Remote Procedure Call) using Redis.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Installation](#installation)
-- [Core Concepts](#core-concepts)
-- [Redis Connection Management](#redis-connection-management)
-- [Basic Usage](#basic-usage)
-- [Advanced Usage](#advanced-usage)
-- [Error Handling](#error-handling)
-- [Examples](#examples)
-- [API Reference](#api-reference)
-- [Contributing](#contributing)
-- [License](#license)
+- [rdscom](#rdscom)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+    - [Key Features](#key-features)
+  - [Core Concepts](#core-concepts)
+    - [Message Queuing](#message-queuing)
+      - [Common Use Cases](#common-use-cases)
+    - [Remote Procedure Call (RPC)](#remote-procedure-call-rpc)
+  - [Installation](#installation)
+  - [Basic Usage](#basic-usage)
+    - [Sending Messages](#sending-messages)
+    - [Receiving Messages](#receiving-messages)
+    - [Using RPC](#using-rpc)
+      - [Setting up an RPC Responder](#setting-up-an-rpc-responder)
+      - [Making an RPC Call](#making-an-rpc-call)
+  - [Advanced Usage](#advanced-usage)
+    - [Distributed Tracing](#distributed-tracing)
+    - [Worker Management](#worker-management)
+    - [Redis Connection Management](#redis-connection-management)
+    - [Logging Configuration](#logging-configuration)
+  - [Error Handling](#error-handling)
+    - [Redis Connection Errors](#redis-connection-errors)
+    - [Malformed Messages](#malformed-messages)
+  - [API Reference](#api-reference)
+    - [`send(channel: string, message: string, traceId?: string): Promise<void>`](#sendchannel-string-message-string-traceid-string-promisevoid)
+    - [`listen(channel: string, handler: Function, errorHandler?: Function, initialWorklimit?: number): Worker`](#listenchannel-string-handler-function-errorhandler-function-initialworklimit-number-worker)
+    - [`sendAndWaitForResponse(channel: string, message: string, traceId?: string): Promise<string>`](#sendandwaitforresponsechannel-string-message-string-traceid-string-promisestring)
+    - [`listenAndRespond(channel: string, handler: Function, errorHandler?: Function): Worker`](#listenandrespondchannel-string-handler-function-errorhandler-function-worker)
+  - [License](#license)
+
+---
 
 ## Overview
 
-rdscom helps you implement two common messaging patterns:
+`rdscom` is a lightweight and efficient TypeScript library designed for message queuing and remote procedure calls (RPC) using Redis. It facilitates asynchronous communication and scalable processing across distributed systems.
 
-1. **Message Queuing**: Send messages between different parts of your application or between different applications, with messages being processed by one or more workers.
+### Key Features
+- **Message Queuing**: Reliable, FIFO-based message delivery with persistence until processed.
+- **Remote Procedure Call (RPC)**: Asynchronous request-response pattern across services.
+- **Distributed Tracing**: Built-in trace ID support for seamless log correlation.
+- **Customizable Logging**: Integrates with your existing logging systems.
+- **Scalable Workers**: Dynamically control concurrency with worker limits.
+- **Full Redis Control**: You manage Redis connections for complete flexibility.
 
-2. **RPC (Remote Procedure Call)**: Make a request to another service and wait for a response, enabling asynchronous request-response patterns across services.
-
-## Installation
-
-Install rdscom and its peer dependency:
-
-```bash
-npm install rdscom ioredis
-```
+---
 
 ## Core Concepts
 
 ### Message Queuing
 
-Message queuing allows different parts of your system to communicate asynchronously. Messages are delivered with very low latency when receivers are actively listening, while also being persisted in Redis until a receiver processes them.
+Message queuing enables asynchronous communication by delivering messages with low latency when receivers are listening, while ensuring persistence until processing.
 
 Key characteristics:
-- Near real-time delivery when receivers are active
-- Messages are stored in Redis until successfully processed
-- Messages accumulate when no receivers are listening
-- First-in-first-out (FIFO) processing within each channel
+- Near real-time delivery when listeners are active.
+- FIFO order within each channel.
+- Messages persist in Redis until successfully processed.
 
-Common use cases include:
-- Processing background jobs
-- Distributing work across multiple services
-- Decoupling components of your application
+#### Common Use Cases
+- Background job processing
+- Load balancing across multiple services
+- Decoupling system components
 - Handling high-throughput operations
-- Implementing resilient service communication
 
-Example: A web service that needs to process uploaded images might send a message to a worker service that handles the image processing, allowing the web service to quickly respond to the user while the processing happens in the background.
-
-Note: Since messages persist until processed, consider implementing message expiry or cleanup strategies for scenarios where old messages become irrelevant. You might want to:
-- Monitor queue lengths
-- Implement periodic cleanup of old messages
-- Set up alerts for queue size thresholds
-- Consider using Redis's built-in key expiration for certain channels
+---
 
 ### Remote Procedure Call (RPC)
 
-RPC in rdscom implements an asynchronous request-response pattern that's useful when you need to:
-- Make a request and handle the response later
-- Call functions in other services without blocking
-- Implement asynchronous request-response patterns across services
-- Maintain loose coupling while getting responses from other services
+RPC allows services to make asynchronous requests and handle responses without blocking. It promotes loose coupling while enabling communication between services.
 
-Example: A service needs to validate user credentials against an authentication service before proceeding.
+Example: A service validates user credentials by making an RPC call to an authentication service.
 
-## Advanced Usage
+Benefits:
+- Enables request-response patterns across services.
+- Supports asynchronous and non-blocking operations.
 
-### Distributed Tracing
+---
 
-rdscom includes built-in support for distributed tracing through `traceId`s:
+## Installation
 
-```typescript
-// Sending with trace ID
-await broker.send(
-  'user-service', 
-  JSON.stringify({ action: 'create' }),
-  'request-123'  // optional traceId
-);
+Install `rdscom` and its peer dependency, [ioredis](https://www.npmjs.com/package/ioredis):
 
-// Receiving with trace ID
-const worker = broker.listen(
-  'user-service',
-  async (message, traceId) => {
-    console.log(`Processing ${traceId}:`, message);
-  },
-  async (error, message, traceId) => {
-    console.error(`Error for ${traceId}:`, error);
-  }
-);
-
-// RPC with trace ID
-const rpcWorker = broker.listenAndRespond(
-  'auth-service',
-  async (message, traceId) => {
-    console.log(`RPC request ${traceId}`);
-    return 'response';
-  },
-  async (error, message, traceId) => {
-    console.error(`RPC error ${traceId}:`, error);
-  }
-);
+```bash
+npm install rdscom ioredis
 ```
 
-TraceIds can be used to:
-- Link messages to their handlers across services
-- Track request-response pairs in RPC calls
-- Correlate logs across your system
-- Integrate with existing tracing systems (e.g., OpenTelemetry)
-
-If not provided, rdscom automatically generates traceIds using UUID v4.
-
-## Redis Connection Management
-
-rdscom does NOT manage Redis connections - this is intentional and gives you full control over:
-- Connection configuration
-- Error handling
-- Connection pooling
-- Reconnection strategies
-
-You are responsible for:
-1. Creating and configuring the Redis client
-2. Handling connection errors
-3. Proper cleanup when shutting down
-
-Example of proper Redis connection management:
-
-```typescript
-import { Redis } from 'ioredis';
-import { createMessageBroker } from 'rdscom';
-
-// Create and configure Redis client
-const redis = new Redis({
-  host: process.env.REDIS_HOST,
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  retryStrategy: (times) => Math.min(times * 50, 2000),
-});
-
-// Handle Redis connection events
-redis.on('error', (err) => {
-  console.error('Redis connection error:', err);
-});
-
-redis.on('connect', () => {
-  console.log('Connected to Redis');
-});
-
-// Create message broker
-const broker = createMessageBroker(redis);
-
-// Cleanup on application shutdown
-process.on('SIGTERM', async () => {
-  await redis.quit();
-});
-```
+---
 
 ## Basic Usage
 
 ### Sending Messages
 
+Send messages to a specific channel:
 ```typescript
-// Simple message sending
-await broker.send('user-service', JSON.stringify({ 
+await broker.send('user-service', JSON.stringify({
   action: 'create',
   data: { name: 'John Doe' }
 }));
@@ -173,243 +105,204 @@ await broker.send('user-service', JSON.stringify({
 
 ### Receiving Messages
 
+Start listening on a channel:
 ```typescript
-// Start a worker to process messages
 const worker = broker.listen(
   'user-service',
   async (message) => {
     const data = JSON.parse(message);
     console.log('Processing message:', data);
-    // Process the message...
-  },
-  async (error, message) => {
-    console.error('Error processing message:', error);
-    // Handle the error...
+    await processMessage(data);
   }
 );
 
-// Later, stop the worker gracefully
+// Gracefully stop the worker later
 await worker.stop();
 ```
 
 ### Using RPC
 
+#### Setting up an RPC Responder
 ```typescript
-// RPC Server (responder)
 const rpcWorker = broker.listenAndRespond(
   'auth-service',
   async (message) => {
     const { username, password } = JSON.parse(message);
-    // Validate credentials...
-    return JSON.stringify({ valid: true });
-  },
-  async (error, message) => {
-    console.error('RPC error:', error);
+    return JSON.stringify({ valid: username === 'admin' });
   }
 );
+```
 
-// RPC Client (caller)
+#### Making an RPC Call
+```typescript
 try {
   const response = await broker.sendAndWaitForResponse(
     'auth-service',
     JSON.stringify({ username: 'user', password: 'pass' })
   );
   const result = JSON.parse(response);
-  console.log('Auth result:', result);
+  console.log('Authentication result:', result);
 } catch (error) {
-  if (error.message.includes('timeout')) {
-    console.error('Auth service did not respond in time');
-  } else {
-    console.error('Auth request failed:', error);
-  }
+  console.error('Error during RPC:', error.message);
 }
 ```
 
+---
+
 ## Advanced Usage
 
-### Message Processing Behavior
+### Distributed Tracing
 
-**Single Listener:**
+Built-in support for trace IDs:
 ```typescript
-// With default worklimit of 1:
-const worker = broker.listen(
-  'channel',
-  async (msg, traceId) => {
-    // This handler processes one message at a time
-    // Next message won't start until this one finishes
-    await processMessage(msg);
-  },
-  async (err, msg, traceId) => { /* ... */ }
+await broker.send(
+  'user-service',
+  JSON.stringify({ action: 'create' }),
+  'trace-123'
 );
 ```
+Trace IDs help:
+- Link messages to handlers across services.
+- Track RPC request-response pairs.
+- Correlate logs across systems.
 
-The default behavior (worklimit=1) processes messages sequentially:
-- Messages are processed one at a time in FIFO order
-- Next message won't start processing until current one completes
-- This happens even if many messages arrive simultaneously
-- It's not like an event emitter that fires multiple callbacks
-- Ensures orderly, sequential processing by default
+### Worker Management
 
-**Multiple Listeners:**
+Control concurrency using worker limits:
 ```typescript
-// In Service A:
-const worker1 = broker.listen('channel', handler1, errorHandler);
-
-// In Service B:
-const worker2 = broker.listen('channel', handler2, errorHandler);
-```
-
-When multiple services or processes listen to the same channel:
-- Messages are automatically distributed among all listeners
-- Each message is processed by exactly one listener
-- Redis handles the distribution automatically
-- Great for load balancing and scaling horizontally
-- Order of processing may vary across listeners
-
-**Worker Limits:**
-- Default limit is 1 worker (single-threaded processing)
-- Setting limit to 0 means unlimited concurrent processing
-- The limit controls how many messages can be processed simultaneously
-- Existing processing is never interrupted when reducing the limit
-
-```typescript
-// Start with default (1 worker)
-const worker = broker.listen(
-  'channel',
-  async (msg, traceId) => { /* ... */ },
-  async (err, msg, traceId) => { /* ... */ }
-);
-
-// Start with custom worker limit
-const multiWorker = broker.listen(
-  'channel',
-  async (msg, traceId) => { /* ... */ },
-  async (err, msg, traceId) => { /* ... */ },
-  5  // 5 concurrent workers
-);
+const worker = broker.listen('channel', async (message) => { /* ... */ }, undefined, 5);
 
 // Adjust limits dynamically
-worker.setWorklimit(10);  // Scale up to 10 workers
-worker.setWorklimit(0);   // No limit on concurrent processing
-
-// Monitor current state
-const stats = worker.getStats();
-console.log(`Active/Total workers: ${stats.activeWorkers}/${stats.worklimit}`);
+worker.setWorklimit(10);  // Increase to 10 workers
+worker.setWorklimit(0);   // Unlimited concurrency
 ```
 
-**How Workers Process Messages:**
-- A worker is considered "busy" while its message handler (the async callback) is running
-- Only after the handler resolves will the worker pick up the next message
-- The worklimit controls how many messages can be processed simultaneously
-- Setting a worklimit of 0 means unlimited concurrent processing
+### Redis Connection Management
 
-**When to Adjust Limits:**
-- Increase for CPU-bound tasks that benefit from parallelism
-- Increase for I/O-bound tasks to handle concurrent operations
-- Reduce if you're overwhelming downstream services
-- Set to 1 for tasks that must be processed sequentially
-- Monitor system resources and adjust accordingly
+You manage Redis connections for full flexibility:
+```typescript
+import { Redis } from 'ioredis';
 
-**Best Practices:**
-- Start with the default (1) and increase based on needs
-- Monitor `activeWorkers` to understand your workload
-- Consider Redis connection limits when setting high worker counts
-- Remember each worker holds a message in memory while processing
+const redis = new Redis({ host: 'localhost', port: 6379 });
 
+redis.on('error', (err) => {
+  console.error('Redis connection error:', err);
+});
 
+const broker = createMessageBroker(redis);
+```
+
+### Logging Configuration
+
+Integrate with your logging system:
+```typescript
+const broker = createMessageBroker(redisClient, { logger: customLogger });
+```
+
+__Heads up!__: Make sure your custom logger implements at least a `warn()` and `error()` method.
+
+```typescript
+interface Logger {
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+```
+
+---
 
 ## Error Handling
 
-rdscom provides multiple layers of error handling:
+### Redis Connection Errors
 
-1. **Redis Operation Errors**: Errors from Redis operations (connection issues, etc.)
-2. **Message Processing Errors**: Errors in your message handlers
-3. **RPC Timeouts**: When RPC responses aren't received in time (default 30 seconds)
-
-Example of comprehensive error handling:
-
+Handle Redis errors at the application level:
 ```typescript
-// Message processing with retries
+redis.on('error', (error) => {
+  console.error('Redis error:', error);
+});
+```
+
+### Malformed Messages
+
+By default, malformed messages are logged and dropped. Provide an error handler to customize:
+```typescript
 const worker = broker.listen(
-  'important-channel',
-  async (message, traceId) => {
-    try {
-      await processWithRetries(message);
-    } catch (error) {
-      // After retries exhausted
-      await moveToDeadLetter(message, error);
-      throw error; // Will be caught by error handler
-    }
-  },
-  async (error, message, traceId) => {
-    await logError({
-      error,
-      message,
-      traceId,
-      channel: 'important-channel'
-    });
+  'channel',
+  async (message) => { /* ... */ },
+  async (error, rawMessage) => {
+    console.warn('Malformed message:', { error, rawMessage });
   }
 );
 ```
 
+---
+
 ## API Reference
 
-### createMessageBroker(redisClient: Redis): MessageBroker
-Creates a new message broker instance.
-- `redisClient`: An ioredis client instance
+### `send(channel: string, message: string, traceId?: string): Promise<void>`
 
-### MessageBroker
+**Description**: Sends a message to a specific channel.
 
-#### send(channelName: string, message: string, traceId?: string): Promise<void>
-Sends a message to a channel.
-- `channelName`: The channel to send to
-- `message`: The message content
-- `traceId`: Optional trace ID for tracking
+**Arguments**:
+- `channel` (string): The name of the Redis channel to send the message to.
+- `message` (string): The content of the message. Should be a stringified JSON object or other valid string.
+- `traceId?` (string, optional): An optional unique identifier for tracing the message. If not provided, a UUID will be generated.
 
-#### listen(channelName: string, handler: MessageHandler, errorHandler: ErrorHandler, initialWorklimit?: number): Worker
-Starts listening for messages on a channel.
-- `channelName`: The channel to listen on
-- `handler`: Function called for each message
-- `errorHandler`: Function called when errors occur
-- `initialWorklimit`: Optional worker limit (default: 1)
-- Returns a Worker instance
+**Example**:
+```typescript
+await broker.send('user-service', JSON.stringify({ action: 'create' }), 'trace-123');
+```
 
-#### sendAndWaitForResponse(channelName: string, message: any, traceId?: string): Promise<string>
-Sends a message and waits for a response (RPC).
-- `channelName`: The channel to send to
-- `message`: The request message
-- `traceId`: Optional trace ID
-- Returns a promise that resolves with the response
-- Times out after 30 seconds by default
+---
 
-#### listenAndRespond(channelName: string, handler: RPCHandler, errorHandler: ErrorHandler, initialWorklimit?: number): Worker
-Sets up an RPC responder.
-- `channelName`: The channel to listen on
-- `handler`: Function to process requests and return responses
-- `errorHandler`: Function called when errors occur
-- `initialWorklimit`: Optional worker limit (default: 1)
-- Returns a Worker instance
+### `listen(channel: string, handler: Function, errorHandler?: Function, initialWorklimit?: number): Worker`
 
-### Worker
+**Description**: Starts listening for messages on a channel.
 
-#### start(): void
-Starts the worker if it was previously stopped.
+**Arguments**:
+- `channel` (string): The name of the channel to listen on.
+- `handler` (Function): The function to process each message.
+- `errorHandler?` (Function, optional): Handles malformed messages.
+- `initialWorklimit?` (number, optional): Limits concurrent workers (default is 1).
 
-#### stop(): Promise<void>
-Gracefully stops the worker.
+**Example**:
+```typescript
+const worker = broker.listen('channel', async (message) => { console.log(message); });
+```
 
-#### setWorklimit(newLimit: number): void
-Changes the worker concurrency limit.
-- `newLimit`: New maximum number of concurrent workers (0 for unlimited)
+---
 
-#### getStats(): WorkerStats
-Returns current worker statistics.
-- Returns: `{ activeWorkers: number, worklimit: number }`
+### `sendAndWaitForResponse(channel: string, message: string, traceId?: string): Promise<string>`
 
-## Contributing
+**Description**: Sends an RPC message and waits for a response.
 
-Contributions are welcome! Please open an issue or submit a pull request on GitHub.
+**Arguments**:
+- `channel` (string): The channel to send the message to.
+- `message` (string): The content of the message.
+- `traceId?` (string, optional): A unique identifier for tracing.
+
+**Example**:
+```typescript
+const response = await broker.sendAndWaitForResponse('auth-service', JSON.stringify({ user: 'admin' }));
+```
+
+---
+
+### `listenAndRespond(channel: string, handler: Function, errorHandler?: Function): Worker`
+
+**Description**: Sets up an RPC responder.
+
+**Arguments**:
+- `channel` (string): The name of the channel to respond to.
+- `handler` (Function): The function to handle requests.
+- `errorHandler?` (Function, optional): Handles errors during request processing.
+
+**Example**:
+```typescript
+const rpcWorker = broker.listenAndRespond('auth-service', async (message) => { return 'response'; });
+```
+
+---
 
 ## License
 
-MIT License
+This project is licensed under the MIT License.

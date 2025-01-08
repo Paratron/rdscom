@@ -3,7 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 
 type MessageHandler = (message: string, traceId: string) => Promise<void>;
 type RPCHandler = (message: string, traceId: string) => Promise<string>;
-type ErrorHandler = (error: Error, message: string, traceId: string) => Promise<void>;
+type MessageBrokerOptions = {
+  logger?: {
+    warn: (message: string, meta?: Record<string, unknown>) => void,
+    error: (message: string, meta?: Record<string, unknown>) => void
+  }
+};
+export type MalformedMessageHandler = (error: Error, message: string) => Promise<void>;
+export type RPCErrorHandler = (error: Error, message: string, traceId: string) => Promise<void>;
 type WorkerStats = { activeWorkers: number; worklimit: number };
 
 interface TracedMessage {
@@ -11,23 +18,21 @@ interface TracedMessage {
   payload: string;
 }
 
-const createMessageBroker = (redisClient: Redis) => {
+const createMessageBroker = (redisClient: Redis, options?: MessageBrokerOptions) => {
+  const logger = options?.logger ?? console;
+
   const send = async (channelName: string, message: string, traceId?: string): Promise<void> => {
     const tracedMessage: TracedMessage = {
       traceId: traceId || uuidv4(),
       payload: message
     };
-    try {
-      await redisClient.rpush(channelName, JSON.stringify(tracedMessage));
-    } catch (error) {
-      throw new Error(`Failed to send message to Redis: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    await redisClient.rpush(channelName, JSON.stringify(tracedMessage));
   };
 
   const listen = (
-    channelName: string, 
-    handler: MessageHandler, 
-    errorHandler: ErrorHandler,
+    channelName: string,
+    handler: MessageHandler,
+    errorHandler?: MalformedMessageHandler,
     initialWorklimit: number = 1
   ) => {
     let worklimit = initialWorklimit;
@@ -42,38 +47,39 @@ const createMessageBroker = (redisClient: Redis) => {
 
       activeWorkers++;
       try {
-        const result = await redisClient.blpop(channelName, shutdownSignal, 0);
-        if (result) {
-          const [resultChannel, message] = result;
-          if (resultChannel === shutdownSignal) {
-            return;
-          }
-          try {
-            const tracedMessage: TracedMessage = JSON.parse(message);
-            await handler(tracedMessage.payload, tracedMessage.traceId);
-          } catch (parseError) {
+        const [resultChannel, message] = await redisClient.blpop(channelName, shutdownSignal, 0) as [string, string];
+        if (resultChannel === shutdownSignal) {
+          return;
+        }
+
+        let tracedMessage: TracedMessage;
+        try {
+          tracedMessage = JSON.parse(message);
+        } catch (error) {
+          logger.warn('Received malformed message:', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            channel: channelName,
+            message
+          });
+
+          if (errorHandler) {
             await errorHandler(
-              new Error(`Failed to parse message: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`),
-              message,
-              uuidv4()
+              new Error(`Malformed message received: ${error instanceof Error ? error.message : 'Unknown error'}`),
+              message
             );
           }
+          return;
         }
-      } catch (error) {
-        if (error instanceof Error) {
-          await errorHandler(
-            new Error(`Redis operation failed: ${error.message}`),
-            'Error processing message',
-            uuidv4()
-          );
-        } else {
-          await errorHandler(
-            new Error('Unknown Redis error occurred'),
-            'Error processing message',
-            uuidv4()
-          );
-        }
-      } finally {
+
+        await handler(tracedMessage.payload, tracedMessage.traceId);
+      }
+      catch (error: any) {
+        logger.error('Redis operation failed:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          channel: channelName
+        });
+      }
+      finally {
         activeWorkers--;
         if (isRunning) {
           setImmediate(processMessage);
@@ -92,17 +98,13 @@ const createMessageBroker = (redisClient: Redis) => {
 
     const stop = async () => {
       isRunning = false;
-      try {
-        for (let i = 0; i < activeWorkers; i++) {
-          await redisClient.rpush(shutdownSignal, 'STOP');
-        }
-        while (activeWorkers > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        await redisClient.del(shutdownSignal);
-      } catch (error) {
-        throw new Error(`Failed to stop worker: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      for (let i = 0; i < activeWorkers; i++) {
+        await redisClient.rpush(shutdownSignal, '1');
       }
+      while (activeWorkers > 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      await redisClient.del(shutdownSignal);
     };
 
     const setWorklimit = (newLimit: number) => {
@@ -125,22 +127,22 @@ const createMessageBroker = (redisClient: Redis) => {
       traceId: traceId || uuidv4(),
       payload: JSON.stringify({ rpcId, message, responseChannel })
     };
-    
+
     try {
       await redisClient.rpush(channelName, JSON.stringify(tracedMessage));
-      
+
       const result = await redisClient.blpop(responseChannel, 30);
       if (result === null) {
         throw new Error('RPC timeout: No response received within 30 seconds');
       }
       const [, response] = result;
-      
+
       try {
         await redisClient.del(responseChannel);
       } catch (cleanupError) {
         console.warn('Failed to clean up RPC response channel:', cleanupError);
       }
-      
+
       return response;
     } catch (error) {
       if (error instanceof Error && error.message.includes('RPC timeout')) {
@@ -151,16 +153,16 @@ const createMessageBroker = (redisClient: Redis) => {
   };
 
   const listenAndRespond = (
-    channelName: string, 
-    handler: RPCHandler, 
-    errorHandler: ErrorHandler,
+    channelName: string,
+    handler: RPCHandler,
+    errorHandler?: RPCErrorHandler,
     initialWorklimit: number = 1
   ) => {
     return listen(
       channelName,
       async (messageStr: string, traceId: string) => {
         try {
-          const { rpcId, message, responseChannel } = JSON.parse(messageStr);
+          const { message, responseChannel } = JSON.parse(messageStr);
           const result = await handler(message, traceId);
           try {
             await redisClient.rpush(responseChannel, result);
@@ -168,14 +170,24 @@ const createMessageBroker = (redisClient: Redis) => {
             throw new Error(`Failed to send RPC response: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
         } catch (error) {
-          await errorHandler(
-            error instanceof Error ? error : new Error('Unknown error in RPC handler'),
-            messageStr,
-            traceId
-          );
+          if (errorHandler) {
+            await errorHandler(
+              error instanceof Error ? error : new Error('Unknown error in RPC handler'),
+              messageStr,
+              traceId
+            );
+          }
         }
       },
-      errorHandler,
+      errorHandler ?
+        async (error, message) => {
+          logger.warn('Received malformed RPC message:', {
+            error: error.message,
+            message,
+            channel: channelName
+          });
+        } :
+        undefined,
       initialWorklimit
     );
   };
@@ -183,4 +195,4 @@ const createMessageBroker = (redisClient: Redis) => {
   return { send, sendAndWaitForResponse, listen, listenAndRespond };
 };
 
-export { createMessageBroker, MessageHandler, RPCHandler, ErrorHandler, WorkerStats };
+export { createMessageBroker, MessageHandler, RPCHandler, WorkerStats };
