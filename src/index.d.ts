@@ -1,18 +1,6 @@
-import { Redis } from 'ioredis';
+import { RedisOptions } from 'ioredis';
 
 declare module 'rdscom' {
-  /**
-   * Logger interface for custom logging.
-   */
-  export interface Logger {
-    /**
-     * Logs a warning message.
-     * @param message - The warning message to log.
-     * @param meta - Optional metadata to include with the log.
-     */
-    warn: (message: string, meta?: Record<string, unknown>) => void;
-  }
-
   /**
    * Handler for processing messages.
    * @param message - The message to process.
@@ -24,6 +12,7 @@ declare module 'rdscom' {
    * Handler for processing RPC messages.
    * @param message - The RPC message to process.
    * @param traceId - The trace ID associated with the message.
+   * @returns A promise that resolves with the response message.
    */
   export type RPCHandler = (message: string, traceId: string) => Promise<string>;
 
@@ -118,9 +107,15 @@ declare module 'rdscom' {
      * @param channelName - The name of the channel.
      * @param message - The message to send.
      * @param traceId - Optional trace ID for the message.
+     * @param ttlSeconds - Optional timeout in seconds (default: 30).
      * @returns A promise that resolves with the response message.
      */
-    sendAndWaitForResponse: (channelName: string, message: any, traceId?: string) => Promise<string>;
+    sendAndWaitForResponse: (
+      channelName: string,
+      message: string,
+      traceId?: string,
+      ttlSeconds?: number
+    ) => Promise<string>;
 
     /**
      * Sets up an RPC responder.
@@ -136,6 +131,50 @@ declare module 'rdscom' {
       errorHandler?: RPCErrorHandler,
       initialWorklimit?: number
     ) => Worker;
+
+    /**
+     * Bind an event listener.
+     * @param event - The event name to listen for.
+     * @param listener - The callback function to execute when the event occurs.
+     */
+    on: (event: string, listener: (...args: any[]) => void) => void;
+
+    /**
+     * Bind a one-time event listener.
+     * @param event - The event name to listen for.
+     * @param listener - The callback function to execute when the event occurs.
+     */
+    once: (event: string, listener: (...args: any[]) => void) => void;
+
+    /**
+     * Remove an event listener.
+     * @param event - The event name.
+     * @param listener - The listener function to remove.
+     */
+    off: (event: string, listener: (...args: any[]) => void) => void;
+
+    /**
+     * Stops the message broker and cleans up resources.
+     * @returns A promise that resolves when cleanup is complete.
+     */
+    stop: () => Promise<void>;
+  }
+
+  /**
+   * Custom logger interface.
+   */
+  export interface Logger {
+    /**
+     * Log a warning message.
+     * @param args - Arguments to log.
+     */
+    warn: (...args: any[]) => void;
+
+    /**
+     * Log an error message.
+     * @param args - Arguments to log.
+     */
+    error: (...args: any[]) => void;
   }
 
   /**
@@ -143,16 +182,19 @@ declare module 'rdscom' {
    */
   export interface MessageBrokerOptions {
     /**
-     * Optional custom logger.
+     * Optional custom logger. Defaults to console if not provided.
      */
     logger?: Logger;
   }
 
   /**
    * Creates a new message broker instance.
-   * @param redisClient - An ioredis client instance.
+   * @param redisConfig - Redis configuration options.
    * @param options - Optional message broker options.
    * @returns A message broker instance.
    */
-  export function createMessageBroker(redisClient: Redis, options?: MessageBrokerOptions): MessageBroker;
+  export function createMessageBroker(
+    redisConfig: RedisOptions,
+    options?: MessageBrokerOptions
+  ): MessageBroker;
 }
