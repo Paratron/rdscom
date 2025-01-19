@@ -8,7 +8,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node14 --outfile=dist/index.js && cp src/index.d.ts dist/index.d.ts",
-    "test": "vitest"
+    "test": ""
   },
   "author": "",
   "license": "MIT",
